@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Medieval Empire</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#111; font-family:Arial,sans-serif; }
+  canvas { display:block; margin:auto; background:#5f8f45; image-rendering:pixelated; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1100" height="700"></canvas>
+<script>
+"use strict";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+const W = canvas.width, H = canvas.height;
+const TILE = 32;
+const WORLD_W = 100, WORLD_H = 70;
+
+let camX = 0, camY = 0;
+let food = 150, wood = 180, stone = 100, gold = 60;
+let population = 5, popCap = 10;
+let score = 0;
+let gameOver = false, victory = false;
+let selectedBuild = null;
+let message = "Build your kingdom!";
+let messageTimer = 240;
+
+const buildings = [];
+const units = [];
+const enemyUnits = [];
+const enemyBuildings = [];
+
+const BUILDINGS = {
+  house:  {name:"House", cost:{wood:40}, cap:5, size:1},
+  farm:   {name:"Farm", cost:{wood:35}, size:1},
+  camp:   {name:"Lumber Camp", cost:{wood:50}, size:1},
+  mine:   {name:"Stone Mine", cost:{wood:60}, size:1},
+  town:   {name:"Town Center", cost:{wood:200,stone:100}, size:2},
+  barracks:{name:"Barracks", cost:{wood:100,stone:40}, size:2}
+};
+
+function addBuilding(type,x,y,enemy=false){
+  const b={type,x,y,enemy};
+  (enemy ? enemyBuildings : buildings).push(b);
+  if(!enemy && type==="house") popCap += BUILDINGS.house.cap;
+}
+
+function addUnit(x,y,enemy=false){
+  const u={x,y,enemy,hp:100,maxHp:100,speed:0.65,cool:0};
+  (enemy ? enemyUnits : units).push(u);
+}
+
+addBuilding("town", 16, 14);
+for(let i=0;i<5;i++) addUnit(18+i%3,16+Math.floor(i/3));
+
+addBuilding("town", 75, 48, true);
+addBuilding("farm", 73, 46, true);
+addBuilding("farm", 77, 46, true);
+for(let i=0;i<8;i++) addUnit(72+i%4,50+Math.floor(i/4),true);
+
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+
+function canAfford(cost){
+  return Object.entries(cost).every(([k,v]) => ({food,wood,stone,gold}[k] >= v));
+}
+
+function pay(cost){
+  for(const [k,v] of Object.entries(cost)){
+    if(k==="food") food-=v;
+    if(k==="wood") wood-=v;
+    if(k==="stone") stone-=v;
+    if(k==="gold") gold-=v;
+  }
+}
+
+function setMessage(t){
+  message=t;
+  messageTimer=180;
+}
+
+function updateEconomy(){
+  let farms=buildings.filter(b=>b.type==="farm").length;
+  let camps=buildings.filter(b=>b.type==="camp").length;
+  let mines=buildings.filter(b=>b.type==="mine").length;
+  food += farms * 0.12;
+  wood += camps * 0.10;
+  stone += mines * 0.06;
+  gold += 0.015;
+  food=clamp(food,0,9999); wood=clamp(wood,0,9999);
+  stone=clamp(stone,0,9999); gold=clamp(gold,0,9999);
+}
+
+function trainSoldier(){
+  const barracks=buildings.find(b=>b.type==="barracks");
+  if(!barracks){ setMessage("Build a barracks first."); return; }
+  if(population>=popCap){ setMessage("Build houses for more population."); return; }
+  if(food<45 || gold<10){ setMessage("Need 45 food and 10 gold."); return; }
+  food-=45; gold-=10; population++;
+  addUnit(barracks.x+1,barracks.y+1);
+  setMessage("Soldier trained!");
+}
+
+function placeBuilding(type){
+  selectedBuild=type;
+  setMessage("Click the map to place a "+BUILDINGS[type].name+".");
+}
+
+function tryPlace(tx,ty){
+  if(!selectedBuild) return;
+  const d=BUILDINGS[selectedBuild];
+  if(!canAfford(d.cost)){ setMessage("Not enough resources."); selectedBuild=null; return; }
+
+  const tooClose=buildings.some(b=>Math.hypot(b.x-tx,b.y-ty)<2.2);
+  if(tooClose){ setMessage("Too close to another building."); return; }
+
+  if(tx<2||ty<3||tx>=WORLD_W-2||ty>=WORLD_H-2){ setMessage("You can't build there."); return; }
+
+  pay(d.cost);
+  addBuilding(selectedBuild,tx,ty);
+  setMessage(d.name+" built!");
+  selectedBuild=null;
+}
+
+function updateUnits(){
+  // Player units move toward enemy base when the player presses A.
+  for(const u of units){
+    if(u.moveToEnemy){
+      const target={x:75,y:48};
+      const dx=target.x-u.x, dy=target.y-u.y;
+      const d=Math.hypot(dx,dy);
+      if(d>2){ u.x+=dx/d*u.speed; u.y+=dy/d*u.speed; }
+    }
+    u.cool=Math.max(0,u.cool-1);
+  }
+
+  for(const u of enemyUnits){
+    const target={x:16,y:14};
+    const dx=target.x-u.x, dy=target.y-u.y;
+    const d=Math.hypot(dx,dy);
+    if(d>12){ u.x+=dx/d*u.speed*0.35; u.y+=dy/d*u.speed*0.35; }
+    u.cool=Math.max(0,u.cool-1);
+  }
+
+  // Simple non-graphic combat: units reduce each other's health.
+  for(const p of units){
+    if(p.cool>0) continue;
+    let nearest=null, nd=999;
+    for(const e of enemyUnits){
+      const d=dist(p,e);
+      if(d<nd){nd=d;nearest=e;}
+    }
+    if(nearest && nd<2.0){
+      nearest.hp-=8; p.cool=30;
+    }
+  }
+
+  for(const e of enemyUnits){
+    if(e.cool>0) continue;
+    let nearest=null, nd=999;
+    for(const p of units){
+      const d=dist(e,p);
+      if(d<nd){nd=d;nearest=p;}
+    }
+    if(nearest && nd<2.0){
+      nearest.hp-=6; e.cool=36;
+    }
+  }
+
+  for(let i=units.length-1;i>=0;i--){
+    if(units[i].hp<=0){ units.splice(i,1); population=Math.max(0,population-1); }
+  }
+  for(let i=enemyUnits.length-1;i>=0;i--){
+    if(enemyUnits[i].hp<=0){ enemyUnits.splice(i,1); score+=10; }
+  }
+
+  // If enough player soldiers reach the enemy town, the enemy town is weakened.
+  const town=enemyBuildings.find(b=>b.type==="town");
+  if(town){
+    let attackers=units.filter(u=>Math.hypot(u.x-town.x,u.y-town.y)<3).length;
+    if(attackers>0){
+      town.hp=(town.hp??300)-attackers*0.08;
+      if(town.hp<=0){ victory=true; setMessage("Victory! The enemy empire has fallen."); }
+    }
+  }
+}
+
+function enemyAI(){
+  if(Math.random()<0.003 && enemyUnits.length<16){
+    const town=enemyBuildings.find(b=>b.type==="town");
+    if(town) addUnit(town.x+1+Math.random()*2,town.y+1+Math.random()*2,true);
+  }
+}
+
+function updateCamera(){
+  if(keys["ArrowLeft"]||keys["a"]) camX-=6;
+  if(keys["ArrowRight"]||keys["d"]) camX+=6;
+  if(keys["ArrowUp"]||keys["w"]) camY-=6;
+  if(keys["ArrowDown"]||keys["s"]) camY+=6;
+  camX=clamp(camX,0,WORLD_W*TILE-W);
+  camY=clamp(camY,0,WORLD_H*TILE-H);
+}
+
+const keys={};
+addEventListener("keydown",e=>{
+  keys[e.key]=true;
+  if(e.key==="1") placeBuilding("house");
+  if(e.key==="2") placeBuilding("farm");
+  if(e.key==="3") placeBuilding("camp");
+  if(e.key==="4") placeBuilding("mine");
+  if(e.key==="5") placeBuilding("barracks");
+  if(e.key==="t") trainSoldier();
+  if(e.key==="a"){
+    for(const u of units) u.moveToEnemy=true;
+    setMessage("Your army is marching!");
+  }
+});
+addEventListener("keyup",e=>keys[e.key]=false);
+
+canvas.addEventListener("click",e=>{
+  const r=canvas.getBoundingClientRect();
+  const sx=(e.clientX-r.left)*W/r.width;
+  const sy=(e.clientY-r.top)*H/r.height;
+
+  // Buttons
+  if(sy<74){
+    if(sx>10&&sx<115) placeBuilding("house");
+    else if(sx>120&&sx<225) placeBuilding("farm");
+    else if(sx>230&&sx<350) placeBuilding("camp");
+    else if(sx>355&&sx<470) placeBuilding("mine");
+    else if(sx>475&&sx<600) placeBuilding("barracks");
+    else if(sx>605&&sx<735) trainSoldier();
+    else if(sx>740&&sx<860){
+      for(const u of units) u.moveToEnemy=true;
+      setMessage("Your army is marching!");
+    }
+    return;
+  }
+
+  const tx=Math.floor((sx+camX)/TILE);
+  const ty=Math.floor((sy+camY)/TILE);
+  tryPlace(tx,ty);
+});
+
+function drawWorld(){
+  ctx.fillStyle="#6c9d4b";
+  ctx.fillRect(0,0,W,H);
+
+  for(let y=Math.floor(camY/TILE);y<Math.ceil((camY+H)/TILE);y++){
+    for(let x=Math.floor(camX/TILE);x<Math.ceil((camX+W)/TILE);x++){
+      if(x<0||y<0||x>=WORLD_W||y>=WORLD_H) continue;
+      const px=x*TILE-camX, py=y*TILE-camY;
+      const n=(x*37+y*17)%13;
+      ctx.fillStyle=n<2?"#5e8e43":"#6c9d4b";
+      ctx.fillRect(px,py,TILE,TILE);
+      if(n===3){
+        ctx.fillStyle="#47723b";
+        ctx.fillRect(px+7,py+9,4,4);
+        ctx.fillRect(px+18,py+18,3,3);
+      }
+    }
+  }
+
+  // A river
+  ctx.fillStyle="#4f8fc1";
+  ctx.beginPath();
+  ctx.moveTo(45*TILE-camX,-20);
+  for(let y=0;y<H+40;y+=40){
+    ctx.lineTo((45*TILE+Math.sin((y+camY)/90)*80)-camX,y);
+  }
+  ctx.lineTo((50*TILE-camX),H);
+  ctx.lineTo((42*TILE-camX),H);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawBuilding(b){
+  const x=b.x*TILE-camX, y=b.y*TILE-camY;
+  const enemy=b.enemy;
+  let w=(BUILDINGS[b.type]?.size||1)*TILE;
+  let h=w;
+
+  if(b.type==="town"){
+    ctx.fillStyle=enemy?"#6e3434":"#4d5d87";
+    ctx.fillRect(x,y,w,h);
+    ctx.fillStyle="#d8c28a";
+    ctx.fillRect(x+8,y+8,w-16,h-8);
+    ctx.fillStyle="#7b3f25";
+    ctx.fillRect(x+w/2-8,y+h-20,16,20);
+  }else if(b.type==="house"){
+    ctx.fillStyle=enemy?"#7c3c3c":"#76502f";
+    ctx.fillRect(x+4,y+10,24,20);
+    ctx.fillStyle="#a84c36";
+    ctx.beginPath(); ctx.moveTo(x+2,y+10);ctx.lineTo(x+16,y);ctx.lineTo(x+30,y+10);ctx.fill();
+  }else if(b.type==="farm"){
+    ctx.fillStyle="#a88443"; ctx.fillRect(x+2,y+2,28,28);
+    ctx.strokeStyle="#755a2e";
+    for(let i=6;i<29;i+=7){ctx.beginPath();ctx.moveTo(x+i,y+3);ctx.lineTo(x+i,y+29);ctx.stroke();}
+  }else if(b.type==="camp"){
+    ctx.fillStyle="#6b4528";ctx.fillRect(x+5,y+14,22,14);
+    ctx.fillStyle="#b37a3c";ctx.fillRect(x+8,y+7,17,7);
+  }else if(b.type==="mine"){
+    ctx.fillStyle="#555";ctx.fillRect(x+4,y+5,24,24);
+    ctx.fillStyle="#222";ctx.fillRect(x+10,y+11,12,18);
+  }else if(b.type==="barracks"){
+    ctx.fillStyle="#61402e";ctx.fillRect(x,y+5,32,25);
+    ctx.fillStyle="#9b2f2f";ctx.beginPath();ctx.moveTo(x-2,y+7);ctx.lineTo(x+16,y-2);ctx.lineTo(x+34,y+7);ctx.fill();
+  }
+}
+
+function drawUnit(u){
+  const x=u.x*TILE-camX, y=u.y*TILE-camY;
+  ctx.fillStyle=u.enemy?"#b33d3d":"#315d9b";
+  ctx.fillRect(x-7,y-7,14,14);
+  ctx.fillStyle="#e4c18a";
+  ctx.fillRect(x-5,y-10,10,6);
+  ctx.fillStyle="#222";
+  ctx.fillRect(x-9,y-15,18,4);
+
+  ctx.fillStyle="#222";ctx.fillRect(x-10,y-20,20,3);
+  ctx.fillStyle="#52c95c";ctx.fillRect(x-10,y-20,20*(u.hp/u.maxHp),3);
+}
+
+function drawUI(){
+  ctx.fillStyle="rgba(20,20,20,.92)";
+  ctx.fillRect(0,0,W,74);
+
+  const buttons=[
+    ["1 House",10,105],["2 Farm",120,225],["3 Camp",230,350],
+    ["4 Mine",355,470],["5 Barracks",475,600],["T Train",605,735],
+    ["A Attack",740,860]
+  ];
+  ctx.font="15px Arial";
+  for(const [txt,x,x2] of buttons){
+    ctx.fillStyle=selectedBuild&&txt.toLowerCase().includes(selectedBuild)?"#d2a74b":"#3b3b3b";
+    ctx.fillRect(x,10,x2-x,32);
+    ctx.fillStyle="#fff";ctx.fillText(txt,x+9,31);
+  }
+
+  ctx.fillStyle="#fff";
+  ctx.font="16px Arial";
+  ctx.fillText("Food: "+Math.floor(food),875,22);
+  ctx.fillText("Wood: "+Math.floor(wood),875,44);
+  ctx.fillText("Stone: "+Math.floor(stone),970,22);
+  ctx.fillText("Gold: "+Math.floor(gold),970,44);
+  ctx.fillText("Population: "+population+"/"+popCap,875,64);
+
+  if(messageTimer>0){
+    ctx.fillStyle="rgba(0,0,0,.72)";
+    ctx.fillRect(300,H-58,500,42);
+    ctx.fillStyle="#fff";
+    ctx.font="18px Arial";
+    ctx.fillText(message,320,H-31);
+  }
+
+  ctx.fillStyle="rgba(0,0,0,.6)";
+  ctx.fillRect(8,H-32,430,24);
+  ctx.fillStyle="#fff";
+  ctx.font="13px Arial";
+  ctx.fillText("WASD/Arrow keys: move camera • 1-5: buildings • T: train • A: attack",18,H-15);
+}
+
+function draw(){
+  drawWorld();
+  for(const b of buildings) drawBuilding(b);
+  for(const b of enemyBuildings) drawBuilding(b);
+  for(const u of units) drawUnit(u);
+  for(const u of enemyUnits) drawUnit(u);
+  drawUI();
+
+  if(victory||gameOver){
+    ctx.fillStyle="rgba(0,0,0,.72)";
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle="#fff";
+    ctx.font="42px Arial";
+    ctx.textAlign="center";
+    ctx.fillText(victory?"VICTORY!":"DEFEAT",W/2,H/2-20);
+    ctx.font="20px Arial";
+    ctx.fillText(victory?"You built a powerful empire.":"Your town center has fallen.",W/2,H/2+20);
+    ctx.textAlign="left";
+  }
+}
+
+let last=0;
+function loop(t){
+  const dt=Math.min(50,t-last); last=t;
+  updateCamera();
+  updateEconomy();
+  updateUnits();
+  enemyAI();
+  if(messageTimer>0) messageTimer--;
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
