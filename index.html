@@ -402,3 +402,2765 @@ requestAnimationFrame(loop);
 </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Medieval Empire</title>
+
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+    font-family: Arial, sans-serif;
+}
+
+canvas {
+    display: block;
+    margin: auto;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #6d9d4d;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game" width="1200" height="750"></canvas>
+
+<script>
+
+"use strict";
+
+/* =========================================================
+   MEDIEVAL EMPIRE
+   ========================================================= */
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+ctx.imageSmoothingEnabled = false;
+
+const SCREEN_W = canvas.width;
+const SCREEN_H = canvas.height;
+
+const TILE = 32;
+
+const WORLD_W = 110;
+const WORLD_H = 80;
+
+let cameraX = 0;
+let cameraY = 0;
+
+let food = 250;
+let wood = 300;
+let stone = 150;
+let gold = 100;
+
+let population = 6;
+let populationCap = 10;
+
+let selectedUnits = [];
+
+let buildingMode = null;
+
+let mouseX = 0;
+let mouseY = 0;
+
+let dragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+
+let gameWon = false;
+let gameLost = false;
+
+let message = "Welcome, ruler!";
+let messageTimer = 300;
+
+
+/* =========================================================
+   DATA
+   ========================================================= */
+
+const BUILDINGS = {
+
+    house: {
+        name: "House",
+        wood: 60,
+        stone: 0,
+        gold: 0,
+        size: 1,
+        population: 5
+    },
+
+    farm: {
+        name: "Farm",
+        wood: 40,
+        stone: 0,
+        gold: 0,
+        size: 1
+    },
+
+    lumber: {
+        name: "Lumber Camp",
+        wood: 70,
+        stone: 0,
+        gold: 0,
+        size: 1
+    },
+
+    mine: {
+        name: "Stone Mine",
+        wood: 80,
+        stone: 0,
+        gold: 0,
+        size: 1
+    },
+
+    barracks: {
+        name: "Barracks",
+        wood: 120,
+        stone: 50,
+        gold: 0,
+        size: 2
+    },
+
+    towncenter: {
+        name: "Town Center",
+        wood: 250,
+        stone: 150,
+        gold: 100,
+        size: 2
+    }
+
+};
+
+
+/* =========================================================
+   ARRAYS
+   ========================================================= */
+
+const buildings = [];
+const enemyBuildings = [];
+
+const units = [];
+const enemyUnits = [];
+
+const resources = [];
+
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function showMessage(text) {
+    message = text;
+    messageTimer = 240;
+}
+
+function canAfford(building) {
+
+    return (
+        wood >= building.wood &&
+        stone >= building.stone &&
+        gold >= building.gold
+    );
+}
+
+function pay(building) {
+
+    wood -= building.wood;
+    stone -= building.stone;
+    gold -= building.gold;
+}
+
+
+/* =========================================================
+   BUILDING CREATION
+   ========================================================= */
+
+function createBuilding(type, x, y, enemy = false) {
+
+    const b = {
+
+        type: type,
+
+        x: x,
+        y: y,
+
+        enemy: enemy,
+
+        hp: type === "towncenter" ? 800 :
+            type === "barracks" ? 500 : 250,
+
+        maxHp: type === "towncenter" ? 800 :
+               type === "barracks" ? 500 : 250
+    };
+
+    if (enemy) {
+        enemyBuildings.push(b);
+    } else {
+        buildings.push(b);
+
+        if (type === "house") {
+            populationCap += BUILDINGS.house.population;
+        }
+    }
+
+    return b;
+}
+
+
+/* =========================================================
+   RESOURCE CREATION
+   ========================================================= */
+
+function createResource(type, x, y, amount) {
+
+    resources.push({
+
+        type: type,
+
+        x: x,
+        y: y,
+
+        amount: amount,
+
+        maxAmount: amount
+    });
+}
+
+
+/* =========================================================
+   UNIT CREATION
+   ========================================================= */
+
+function createUnit(type, x, y, enemy = false) {
+
+    let unit = {
+
+        type: type,
+
+        x: x,
+        y: y,
+
+        targetX: x,
+        targetY: y,
+
+        enemy: enemy,
+
+        hp: 100,
+        maxHp: 100,
+
+        speed: 0.8,
+
+        attack: 8,
+
+        range: 1.4,
+
+        cooldown: 0,
+
+        selected: false,
+
+        gatherTarget: null,
+
+        carrying: 0,
+
+        carryingType: null,
+
+        attackTarget: null,
+
+        moving: false
+    };
+
+
+    if (type === "villager") {
+
+        unit.hp = 70;
+        unit.maxHp = 70;
+
+        unit.speed = 0.7;
+
+        unit.attack = 3;
+    }
+
+
+    if (type === "swordsman") {
+
+        unit.hp = 140;
+        unit.maxHp = 140;
+
+        unit.speed = 0.65;
+
+        unit.attack = 15;
+
+        unit.range = 1.4;
+    }
+
+
+    if (type === "archer") {
+
+        unit.hp = 80;
+        unit.maxHp = 80;
+
+        unit.speed = 0.7;
+
+        unit.attack = 10;
+
+        unit.range = 5;
+    }
+
+
+    if (enemy) {
+        enemyUnits.push(unit);
+    } else {
+        units.push(unit);
+    }
+
+    return unit;
+}
+
+
+/* =========================================================
+   STARTING EMPIRE
+   ========================================================= */
+
+createBuilding("towncenter", 15, 15);
+
+for (let i = 0; i < 6; i++) {
+
+    createUnit(
+        "villager",
+        18 + (i % 3),
+        18 + Math.floor(i / 3)
+    );
+}
+
+
+/* =========================================================
+   ENEMY EMPIRE
+   ========================================================= */
+
+createBuilding(
+    "towncenter",
+    88,
+    60,
+    true
+);
+
+createBuilding(
+    "barracks",
+    91,
+    63,
+    true
+);
+
+for (let i = 0; i < 8; i++) {
+
+    createUnit(
+        "villager",
+        85 + (i % 4),
+        63 + Math.floor(i / 4),
+        true
+    );
+}
+
+for (let i = 0; i < 4; i++) {
+
+    createUnit(
+        "swordsman",
+        92 + (i % 2),
+        66 + Math.floor(i / 2),
+        true
+    );
+}
+
+
+/* =========================================================
+   WORLD RESOURCES
+   ========================================================= */
+
+for (let i = 0; i < 60; i++) {
+
+    createResource(
+        "wood",
+        3 + Math.random() * 45,
+        3 + Math.random() * 70,
+        250
+    );
+}
+
+
+for (let i = 0; i < 35; i++) {
+
+    createResource(
+        "stone",
+        5 + Math.random() * 80,
+        5 + Math.random() * 70,
+        250
+    );
+}
+
+
+for (let i = 0; i < 25; i++) {
+
+    createResource(
+        "food",
+        5 + Math.random() * 85,
+        5 + Math.random() * 70,
+        200
+    );
+}
+
+
+/* =========================================================
+   CAMERA
+   ========================================================= */
+
+const keys = {};
+
+window.addEventListener("keydown", function(e) {
+
+    keys[e.key.toLowerCase()] = true;
+
+    if (e.key === "Escape") {
+
+        buildingMode = null;
+        selectedUnits = [];
+
+    }
+
+    if (e.key === "1") {
+        buildingMode = "house";
+        showMessage("Place a house.");
+    }
+
+    if (e.key === "2") {
+        buildingMode = "farm";
+        showMessage("Place a farm.");
+    }
+
+    if (e.key === "3") {
+        buildingMode = "lumber";
+        showMessage("Place a lumber camp.");
+    }
+
+    if (e.key === "4") {
+        buildingMode = "mine";
+        showMessage("Place a stone mine.");
+    }
+
+    if (e.key === "5") {
+        buildingMode = "barracks";
+        showMessage("Place a barracks.");
+    }
+
+    if (e.key.toLowerCase() === "t") {
+
+        trainSoldier("swordsman");
+    }
+
+    if (e.key.toLowerCase() === "v") {
+
+        trainVillager();
+    }
+});
+
+
+window.addEventListener("keyup", function(e) {
+
+    keys[e.key.toLowerCase()] = false;
+});
+
+
+function updateCamera() {
+
+    const speed = 7;
+
+    if (keys["w"] || keys["arrowup"]) {
+        cameraY -= speed;
+    }
+
+    if (keys["s"] || keys["arrowdown"]) {
+        cameraY += speed;
+    }
+
+    if (keys["a"] || keys["arrowleft"]) {
+        cameraX -= speed;
+    }
+
+    if (keys["d"] || keys["arrowright"]) {
+        cameraX += speed;
+    }
+
+    cameraX = clamp(
+        cameraX,
+        0,
+        WORLD_W * TILE - SCREEN_W
+    );
+
+    cameraY = clamp(
+        cameraY,
+        0,
+        WORLD_H * TILE - SCREEN_H
+    );
+}
+
+
+/* =========================================================
+   MOUSE
+   ========================================================= */
+
+canvas.addEventListener("mousemove", function(e) {
+
+    const rect = canvas.getBoundingClientRect();
+
+    mouseX =
+        (e.clientX - rect.left) *
+        SCREEN_W / rect.width;
+
+    mouseY =
+        (e.clientY - rect.top) *
+        SCREEN_H / rect.height;
+
+});
+
+
+canvas.addEventListener("mousedown", function(e) {
+
+    if (e.button === 0) {
+
+        dragging = true;
+
+        dragStartX = mouseX;
+        dragStartY = mouseY;
+    }
+
+});
+
+
+canvas.addEventListener("mouseup", function(e) {
+
+    if (e.button === 0) {
+
+        if (dragging) {
+
+            const dx = mouseX - dragStartX;
+            const dy = mouseY - dragStartY;
+
+            if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+
+                selectBox();
+
+            } else {
+
+                leftClick();
+
+            }
+        }
+
+        dragging = false;
+    }
+
+});
+
+
+canvas.addEventListener("contextmenu", function(e) {
+
+    e.preventDefault();
+
+    rightClick();
+
+});
+
+
+/* =========================================================
+   SCREEN TO WORLD
+   ========================================================= */
+
+function screenToWorld() {
+
+    return {
+
+        x: (mouseX + cameraX) / TILE,
+
+        y: (mouseY + cameraY) / TILE
+    };
+}
+
+
+/* =========================================================
+   LEFT CLICK
+   ========================================================= */
+
+function leftClick() {
+
+    if (gameWon || gameLost) return;
+
+    if (mouseY < 90) {
+
+        handleUI();
+
+        return;
+    }
+
+
+    if (buildingMode) {
+
+        placeBuilding();
+
+        return;
+    }
+
+
+    const world = screenToWorld();
+
+    let clickedUnit = null;
+
+    for (const unit of units) {
+
+        if (
+            Math.hypot(
+                unit.x - world.x,
+                unit.y - world.y
+            ) < 0.7
+        ) {
+
+            clickedUnit = unit;
+
+            break;
+        }
+    }
+
+
+    if (clickedUnit) {
+
+        selectedUnits.forEach(u => {
+            u.selected = false;
+        });
+
+        selectedUnits = [clickedUnit];
+
+        clickedUnit.selected = true;
+
+        return;
+    }
+
+
+    selectedUnits.forEach(u => {
+        u.selected = false;
+    });
+
+    selectedUnits = [];
+}
+
+
+/* =========================================================
+   DRAG SELECT
+   ========================================================= */
+
+function selectBox() {
+
+    const left = Math.min(
+        dragStartX,
+        mouseX
+    );
+
+    const right = Math.max(
+        dragStartX,
+        mouseX
+    );
+
+    const top = Math.min(
+        dragStartY,
+        mouseY
+    );
+
+    const bottom = Math.max(
+        dragStartY,
+        mouseY
+    );
+
+
+    selectedUnits.forEach(u => {
+        u.selected = false;
+    });
+
+    selectedUnits = [];
+
+
+    for (const unit of units) {
+
+        const sx = unit.x * TILE - cameraX;
+        const sy = unit.y * TILE - cameraY;
+
+        if (
+            sx >= left &&
+            sx <= right &&
+            sy >= top &&
+            sy <= bottom
+        ) {
+
+            unit.selected = true;
+
+            selectedUnits.push(unit);
+        }
+    }
+}
+
+
+/* =========================================================
+   RIGHT CLICK
+   ========================================================= */
+
+function rightClick() {
+
+    if (gameWon || gameLost) return;
+
+    if (selectedUnits.length === 0) {
+        return;
+    }
+
+    const world = screenToWorld();
+
+    let enemyTarget = null;
+
+    for (const enemy of enemyUnits) {
+
+        if (
+            Math.hypot(
+                enemy.x - world.x,
+                enemy.y - world.y
+            ) < 1.2
+        ) {
+
+            enemyTarget = enemy;
+
+            break;
+        }
+    }
+
+
+    if (enemyTarget) {
+
+        for (const unit of selectedUnits) {
+
+            unit.attackTarget = enemyTarget;
+
+            unit.gatherTarget = null;
+        }
+
+        showMessage("Attack!");
+        return;
+    }
+
+
+    for (let i = 0; i < selectedUnits.length; i++) {
+
+        const unit = selectedUnits[i];
+
+        unit.attackTarget = null;
+
+        unit.gatherTarget = null;
+
+        const spreadX =
+            (i % 3 - 1) * 1.5;
+
+        const spreadY =
+            (Math.floor(i / 3)) * 1.5;
+
+        unit.targetX = world.x + spreadX;
+        unit.targetY = world.y + spreadY;
+
+        unit.moving = true;
+    }
+}
+
+
+/* =========================================================
+   UI BUTTONS
+   ========================================================= */
+
+function handleUI() {
+
+    if (mouseX < 115) {
+
+        buildingMode = "house";
+
+        showMessage("Place a house.");
+
+    } else if (mouseX < 220) {
+
+        buildingMode = "farm";
+
+        showMessage("Place a farm.");
+
+    } else if (mouseX < 340) {
+
+        buildingMode = "lumber";
+
+        showMessage("Place a lumber camp.");
+
+    } else if (mouseX < 455) {
+
+        buildingMode = "mine";
+
+        showMessage("Place a stone mine.");
+
+    } else if (mouseX < 585) {
+
+        buildingMode = "barracks";
+
+        showMessage("Place a barracks.");
+
+    } else if (mouseX < 720) {
+
+        trainSoldier("swordsman");
+
+    } else if (mouseX < 850) {
+
+        trainVillager();
+    }
+}
+
+
+/* =========================================================
+   BUILDING PLACEMENT
+   ========================================================= */
+
+function placeBuilding() {
+
+    const world = screenToWorld();
+
+    const tx = Math.floor(world.x);
+
+    const ty = Math.floor(world.y);
+
+    const data = BUILDINGS[buildingMode];
+
+
+    if (!canAfford(data)) {
+
+        showMessage("Not enough resources!");
+
+        buildingMode = null;
+
+        return;
+    }
+
+
+    for (const b of buildings) {
+
+        if (
+            Math.hypot(
+                b.x - tx,
+                b.y - ty
+            ) < 2
+        ) {
+
+            showMessage("Too close to another building.");
+
+            return;
+        }
+    }
+
+
+    if (
+        tx < 2 ||
+        ty < 2 ||
+        tx >= WORLD_W - 2 ||
+        ty >= WORLD_H - 2
+    ) {
+
+        showMessage("You cannot build there.");
+
+        return;
+    }
+
+
+    pay(data);
+
+    createBuilding(
+        buildingMode,
+        tx,
+        ty
+    );
+
+    showMessage(
+        data.name + " built!"
+    );
+
+    buildingMode = null;
+}
+
+
+/* =========================================================
+   TRAIN UNITS
+   ========================================================= */
+
+function findBuilding(type) {
+
+    return buildings.find(
+        b => b.type === type
+    );
+}
+
+
+function trainSoldier(type) {
+
+    const barracks =
+        findBuilding("barracks");
+
+    if (!barracks) {
+
+        showMessage(
+            "Build a barracks first."
+        );
+
+        return;
+    }
+
+
+    if (population >= populationCap) {
+
+        showMessage(
+            "Build more houses."
+        );
+
+        return;
+    }
+
+
+    if (food < 60 || gold < 15) {
+
+        showMessage(
+            "Need 60 food and 15 gold."
+        );
+
+        return;
+    }
+
+
+    food -= 60;
+    gold -= 15;
+
+    population++;
+
+    createUnit(
+        type,
+        barracks.x + 2,
+        barracks.y + 2
+    );
+
+    showMessage(
+        "Swordsman trained!"
+    );
+}
+
+
+function trainVillager() {
+
+    const town =
+        findBuilding("towncenter");
+
+    if (!town) return;
+
+    if (population >= populationCap) {
+
+        showMessage(
+            "Build more houses."
+        );
+
+        return;
+    }
+
+
+    if (food < 50) {
+
+        showMessage(
+            "Need 50 food."
+        );
+
+        return;
+    }
+
+
+    food -= 50;
+
+    population++;
+
+    createUnit(
+        "villager",
+        town.x + 2,
+        town.y + 2
+    );
+
+    showMessage(
+        "Villager trained!"
+    );
+}
+
+
+/* =========================================================
+   RESOURCE GATHERING
+   ========================================================= */
+
+function findNearestResource(unit) {
+
+    let closest = null;
+
+    let bestDistance = Infinity;
+
+
+    for (const r of resources) {
+
+        if (r.amount <= 0) continue;
+
+
+        const d = distance(
+            unit,
+            r
+        );
+
+
+        if (d < bestDistance) {
+
+            bestDistance = d;
+
+            closest = r;
+        }
+    }
+
+
+    return closest;
+}
+
+
+function gatherResource(unit) {
+
+    if (
+        unit.type !== "villager" ||
+        unit.enemy
+    ) {
+        return;
+    }
+
+
+    if (!unit.gatherTarget) {
+
+        unit.gatherTarget =
+            findNearestResource(unit);
+
+        return;
+    }
+
+
+    const resource =
+        unit.gatherTarget;
+
+
+    if (
+        !resources.includes(resource) ||
+        resource.amount <= 0
+    ) {
+
+        unit.gatherTarget = null;
+
+        return;
+    }
+
+
+    const town =
+        findBuilding("towncenter");
+
+
+    if (!town) return;
+
+
+    if (unit.carrying >= 10) {
+
+        unit.targetX =
+            town.x + 2;
+
+        unit.targetY =
+            town.y + 2;
+
+        unit.moving = true;
+
+
+        if (
+            distance(
+                unit,
+                town
+            ) < 2
+        ) {
+
+            if (unit.carryingType === "wood") {
+                wood += unit.carrying;
+            }
+
+            if (unit.carryingType === "stone") {
+                stone += unit.carrying;
+            }
+
+            if (unit.carryingType === "food") {
+                food += unit.carrying;
+            }
+
+
+            unit.carrying = 0;
+
+            unit.carryingType = null;
+
+            unit.gatherTarget = null;
+        }
+
+
+        return;
+    }
+
+
+    unit.targetX =
+        resource.x;
+
+    unit.targetY =
+        resource.y;
+
+    unit.moving = true;
+
+
+    if (
+        distance(
+            unit,
+            resource
+        ) < 1.2
+    ) {
+
+        const amount =
+            Math.min(
+                10 - unit.carrying,
+                resource.amount
+            );
+
+
+        unit.carrying += amount;
+
+        unit.carryingType =
+            resource.type;
+
+        resource.amount -= amount;
+    }
+}
+
+
+/* =========================================================
+   MOVEMENT
+   ========================================================= */
+
+function moveUnit(unit) {
+
+    if (!unit.moving) return;
+
+
+    const dx =
+        unit.targetX - unit.x;
+
+    const dy =
+        unit.targetY - unit.y;
+
+    const d =
+        Math.hypot(dx, dy);
+
+
+    if (d < 0.1) {
+
+        unit.moving = false;
+
+        return;
+    }
+
+
+    const amount =
+        Math.min(
+            unit.speed,
+            d
+        );
+
+
+    unit.x +=
+        dx / d * amount;
+
+    unit.y +=
+        dy / d * amount;
+}
+
+
+/* =========================================================
+   COMBAT
+   ========================================================= */
+
+function combat(unit) {
+
+    if (
+        !unit.attackTarget ||
+        unit.attackTarget.hp <= 0
+    ) {
+
+        unit.attackTarget = null;
+
+        return;
+    }
+
+
+    const target =
+        unit.attackTarget;
+
+
+    const d =
+        distance(
+            unit,
+            target
+        );
+
+
+    if (
+        d >
+        unit.range
+    ) {
+
+        unit.targetX =
+            target.x;
+
+        unit.targetY =
+            target.y;
+
+        unit.moving = true;
+
+        return;
+    }
+
+
+    unit.moving = false;
+
+
+    if (unit.cooldown > 0) {
+
+        unit.cooldown--;
+
+        return;
+    }
+
+
+    target.hp -=
+        unit.attack;
+
+
+    unit.cooldown = 35;
+}
+
+
+/* =========================================================
+   ENEMY AI
+   ========================================================= */
+
+let enemyTimer = 0;
+
+
+function enemyAI() {
+
+    enemyTimer++;
+
+
+    if (
+        enemyTimer % 240 === 0 &&
+        enemyUnits.length < 15
+    ) {
+
+        const barracks =
+            enemyBuildings.find(
+                b => b.type === "barracks"
+            );
+
+
+        if (barracks) {
+
+            createUnit(
+                "swordsman",
+                barracks.x + 2,
+                barracks.y + 2,
+                true
+            );
+        }
+    }
+
+
+    if (enemyTimer % 500 === 0) {
+
+        for (const enemy of enemyUnits) {
+
+            if (
+                enemy.type === "swordsman"
+            ) {
+
+                const target =
+                    units[
+                        Math.floor(
+                            Math.random() *
+                            units.length
+                        )
+                    ];
+
+
+                if (target) {
+
+                    enemy.attackTarget =
+                        target;
+                }
+            }
+        }
+    }
+
+
+    for (const enemy of enemyUnits) {
+
+        if (!enemy.attackTarget) {
+
+            const town =
+                buildings.find(
+                    b => b.type === "towncenter"
+                );
+
+
+            if (town) {
+
+                enemy.attackTarget =
+                    town;
+            }
+        }
+    }
+}
+
+
+/* =========================================================
+   UPDATE UNITS
+   ========================================================= */
+
+function updateUnits() {
+
+    for (const unit of units) {
+
+        if (unit.attackTarget) {
+
+            combat(unit);
+
+        } else if (
+            unit.type === "villager"
+        ) {
+
+            gatherResource(unit);
+
+            moveUnit(unit);
+
+        } else {
+
+            moveUnit(unit);
+        }
+    }
+
+
+    for (const enemy of enemyUnits) {
+
+        if (enemy.attackTarget) {
+
+            combat(enemy);
+
+        } else {
+
+            moveUnit(enemy);
+        }
+    }
+}
+
+
+/* =========================================================
+   CLEANUP
+   ========================================================= */
+
+function cleanupDeadUnits() {
+
+    for (
+        let i = units.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        if (units[i].hp <= 0) {
+
+            const dead =
+                units[i];
+
+            const index =
+                selectedUnits.indexOf(
+                    dead
+                );
+
+
+            if (index !== -1) {
+
+                selectedUnits.splice(
+                    index,
+                    1
+                );
+            }
+
+
+            units.splice(i, 1);
+
+            population =
+                Math.max(
+                    0,
+                    population - 1
+                );
+        }
+    }
+
+
+    for (
+        let i = enemyUnits.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        if (
+            enemyUnits[i].hp <= 0
+        ) {
+
+            enemyUnits.splice(
+                i,
+                1
+            );
+        }
+    }
+}
+
+
+/* =========================================================
+   BUILDING DAMAGE
+   ========================================================= */
+
+function updateBuildingCombat() {
+
+    for (const enemy of enemyUnits) {
+
+        if (!enemy.attackTarget) continue;
+
+        const target =
+            enemy.attackTarget;
+
+
+        if (
+            target.type &&
+            buildings.includes(target)
+        ) {
+
+            const d =
+                distance(
+                    enemy,
+                    target
+                );
+
+
+            if (d < 2) {
+
+                if (
+                    enemy.cooldown <= 0
+                ) {
+
+                    target.hp -=
+                        enemy.attack;
+
+                    enemy.cooldown =
+                        40;
+                }
+            }
+        }
+    }
+
+
+    for (const unit of units) {
+
+        if (!unit.attackTarget) continue;
+
+        const target =
+            unit.attackTarget;
+
+
+        if (
+            target.type &&
+            enemyBuildings.includes(target)
+        ) {
+
+            const d =
+                distance(
+                    unit,
+                    target
+                );
+
+
+            if (d < unit.range) {
+
+                if (
+                    unit.cooldown <= 0
+                ) {
+
+                    target.hp -=
+                        unit.attack;
+
+                    unit.cooldown =
+                        40;
+                }
+            }
+        }
+    }
+}
+
+
+/* =========================================================
+   CHECK WIN / LOSS
+   ========================================================= */
+
+function checkGameEnd() {
+
+    const enemyTown =
+        enemyBuildings.find(
+            b => b.type === "towncenter"
+        );
+
+
+    const playerTown =
+        buildings.find(
+            b => b.type === "towncenter"
+        );
+
+
+    if (
+        !enemyTown ||
+        enemyTown.hp <= 0
+    ) {
+
+        gameWon = true;
+    }
+
+
+    if (
+        !playerTown ||
+        playerTown.hp <= 0
+    ) {
+
+        gameLost = true;
+    }
+}
+
+
+/* =========================================================
+   ECONOMY
+   ========================================================= */
+
+function updateEconomy() {
+
+    // Small passive gold income.
+    gold += 0.02;
+
+    // Remove empty resources.
+    for (
+        let i = resources.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        if (
+            resources[i].amount <= 0
+        ) {
+
+            resources.splice(
+                i,
+                1
+            );
+        }
+    }
+}
+
+
+/* =========================================================
+   DRAW WORLD
+   ========================================================= */
+
+function drawWorld() {
+
+    ctx.fillStyle =
+        "#6c9d4b";
+
+    ctx.fillRect(
+        0,
+        0,
+        SCREEN_W,
+        SCREEN_H
+    );
+
+
+    const startX =
+        Math.floor(
+            cameraX / TILE
+        );
+
+    const endX =
+        Math.ceil(
+            (cameraX + SCREEN_W) /
+            TILE
+        );
+
+
+    const startY =
+        Math.floor(
+            cameraY / TILE
+        );
+
+    const endY =
+        Math.ceil(
+            (cameraY + SCREEN_H) /
+            TILE
+        );
+
+
+    for (
+        let y = startY;
+        y < endY;
+        y++
+    ) {
+
+        for (
+            let x = startX;
+            x < endX;
+            x++
+        ) {
+
+            const px =
+                x * TILE -
+                cameraX;
+
+            const py =
+                y * TILE -
+                cameraY;
+
+
+            const n =
+                (x * 17 +
+                 y * 31) % 10;
+
+
+            ctx.fillStyle =
+                n < 2
+                ? "#638f47"
+                : "#6c9d4b";
+
+
+            ctx.fillRect(
+                px,
+                py,
+                TILE,
+                TILE
+            );
+
+
+            if (n === 3) {
+
+                ctx.fillStyle =
+                    "#4d793c";
+
+                ctx.fillRect(
+                    px + 8,
+                    py + 10,
+                    4,
+                    4
+                );
+            }
+        }
+    }
+
+
+    // River
+
+    ctx.fillStyle =
+        "#4b8ec0";
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        58 * TILE -
+        cameraX,
+        0
+    );
+
+
+    for (
+        let y = 0;
+        y <= SCREEN_H;
+        y += 30
+    ) {
+
+        ctx.lineTo(
+            58 * TILE +
+            Math.sin(
+                (y + cameraY) / 80
+            ) * 80 -
+            cameraX,
+            y
+        );
+    }
+
+
+    ctx.lineTo(
+        64 * TILE -
+        cameraX,
+        SCREEN_H
+    );
+
+    ctx.lineTo(
+        52 * TILE -
+        cameraX,
+        SCREEN_H
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+}
+
+
+/* =========================================================
+   DRAW RESOURCES
+   ========================================================= */
+
+function drawResources() {
+
+    for (const r of resources) {
+
+        const x =
+            r.x * TILE -
+            cameraX;
+
+        const y =
+            r.y * TILE -
+            cameraY;
+
+
+        if (
+            x < -50 ||
+            y < -50 ||
+            x > SCREEN_W + 50 ||
+            y > SCREEN_H + 50
+        ) continue;
+
+
+        if (r.type === "wood") {
+
+            ctx.fillStyle =
+                "#315f31";
+
+            ctx.fillRect(
+                x - 10,
+                y - 10,
+                20,
+                20
+            );
+
+            ctx.fillStyle =
+                "#674326";
+
+            ctx.fillRect(
+                x - 4,
+                y,
+                8,
+                15
+            );
+        }
+
+
+        if (r.type === "stone") {
+
+            ctx.fillStyle =
+                "#777";
+
+            ctx.fillRect(
+                x - 11,
+                y - 9,
+                22,
+                18
+            );
+
+            ctx.fillStyle =
+                "#999";
+
+            ctx.fillRect(
+                x - 6,
+                y - 7,
+                7,
+                5
+            );
+        }
+
+
+        if (r.type === "food") {
+
+            ctx.fillStyle =
+                "#b98a3b";
+
+            ctx.fillRect(
+                x - 12,
+                y - 5,
+                24,
+                10
+            );
+
+            ctx.fillStyle =
+                "#8b672b";
+
+            ctx.fillRect(
+                x - 8,
+                y - 9,
+                4,
+                18
+            );
+
+            ctx.fillRect(
+                x,
+                y - 9,
+                4,
+                18
+            );
+
+            ctx.fillRect(
+                x + 8,
+                y - 9,
+                4,
+                18
+            );
+        }
+    }
+}
+
+
+/* =========================================================
+   DRAW BUILDINGS
+   ========================================================= */
+
+function drawBuildings() {
+
+    for (const b of buildings) {
+
+        drawBuilding(
+            b,
+            false
+        );
+    }
+
+
+    for (const b of enemyBuildings) {
+
+        drawBuilding(
+            b,
+            true
+        );
+    }
+}
+
+
+function drawBuilding(b, enemy) {
+
+    const x =
+        b.x * TILE -
+        cameraX;
+
+    const y =
+        b.y * TILE -
+        cameraY;
+
+
+    const size =
+        BUILDINGS[b.type].size *
+        TILE;
+
+
+    ctx.fillStyle =
+        enemy
+        ? "#7d3b3b"
+        : "#435f91";
+
+
+    ctx.fillRect(
+        x,
+        y,
+        size,
+        size
+    );
+
+
+    if (
+        b.type ===
+        "towncenter"
+    ) {
+
+        ctx.fillStyle =
+            "#d1bd80";
+
+        ctx.fillRect(
+            x + 8,
+            y + 8,
+            size - 16,
+            size - 16
+        );
+
+
+        ctx.fillStyle =
+            "#70472c";
+
+        ctx.fillRect(
+            x + size / 2 - 8,
+            y + size - 22,
+            16,
+            22
+        );
+    }
+
+
+    if (
+        b.type === "house"
+    ) {
+
+        ctx.fillStyle =
+            "#9b4d35";
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            x - 3,
+            y + 12
+        );
+
+        ctx.lineTo(
+            x + size / 2,
+            y - 5
+        );
+
+        ctx.lineTo(
+            x + size + 3,
+            y + 12
+        );
+
+        ctx.fill();
+
+
+        ctx.fillStyle =
+            "#6b452b";
+
+        ctx.fillRect(
+            x + 5,
+            y + 12,
+            size - 10,
+            size - 12
+        );
+    }
+
+
+    if (
+        b.type === "farm"
+    ) {
+
+        ctx.fillStyle =
+            "#a9823f";
+
+        ctx.fillRect(
+            x + 2,
+            y + 2,
+            size - 4,
+            size - 4
+        );
+
+
+        ctx.strokeStyle =
+            "#6c512a";
+
+        for (
+            let i = 5;
+            i < size;
+            i += 7
+        ) {
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                x + i,
+                y + 2
+            );
+
+            ctx.lineTo(
+                x + i,
+                y + size - 2
+            );
+
+            ctx.stroke();
+        }
+    }
+
+
+    if (
+        b.type === "lumber"
+    ) {
+
+        ctx.fillStyle =
+            "#6a4528";
+
+        ctx.fillRect(
+            x + 3,
+            y + 12,
+            size - 6,
+            size - 12
+        );
+
+        ctx.fillStyle =
+            "#b07b3d";
+
+        ctx.fillRect(
+            x + 6,
+            y + 5,
+            size - 12,
+            8
+        );
+    }
+
+
+    if (
+        b.type === "mine"
+    ) {
+
+        ctx.fillStyle =
+            "#555";
+
+        ctx.fillRect(
+            x + 3,
+            y + 3,
+            size - 6,
+            size - 6
+        );
+
+        ctx.fillStyle =
+            "#202020";
+
+        ctx.fillRect(
+            x + 9,
+            y + 9,
+            size - 18,
+            size - 9
+        );
+    }
+
+
+    if (
+        b.type === "barracks"
+    ) {
+
+        ctx.fillStyle =
+            "#71472d";
+
+        ctx.fillRect(
+            x,
+            y + 7,
+            size,
+            size - 7
+        );
+
+        ctx.fillStyle =
+            "#9b3333";
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            x - 3,
+            y + 8
+        );
+
+        ctx.lineTo(
+            x + size / 2,
+            y - 4
+        );
+
+        ctx.lineTo(
+            x + size + 3,
+            y + 8
+        );
+
+        ctx.fill();
+    }
+
+
+    // Health bar
+
+    const healthPercent =
+        clamp(
+            b.hp / b.maxHp,
+            0,
+            1
+        );
+
+
+    ctx.fillStyle =
+        "#222";
+
+    ctx.fillRect(
+        x,
+        y - 8,
+        size,
+        5
+    );
+
+
+    ctx.fillStyle =
+        "#4fc45b";
+
+    ctx.fillRect(
+        x,
+        y - 8,
+        size * healthPercent,
+        5
+    );
+}
+
+
+/* =========================================================
+   DRAW UNITS
+   ========================================================= */
+
+function drawUnits() {
+
+    for (const unit of units) {
+
+        drawUnit(
+            unit,
+            false
+        );
+    }
+
+
+    for (const unit of enemyUnits) {
+
+        drawUnit(
+            unit,
+            true
+        );
+    }
+}
+
+
+function drawUnit(unit, enemy) {
+
+    const x =
+        unit.x * TILE -
+        cameraX;
+
+    const y =
+        unit.y * TILE -
+        cameraY;
+
+
+    if (unit.selected) {
+
+        ctx.strokeStyle =
+            "#ffe45c";
+
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            y + 7,
+            12,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.stroke();
+    }
+
+
+    ctx.fillStyle =
+        enemy
+        ? "#b63c3c"
+        : "#315fa1";
+
+
+    ctx.fillRect(
+        x - 7,
+        y - 7,
+        14,
+        14
+    );
+
+
+    ctx.fillStyle =
+        "#e3c18d";
+
+    ctx.fillRect(
+        x - 5,
+        y - 13,
+        10,
+        7
+    );
+
+
+    if (
+        unit.type === "swordsman"
+    ) {
+
+        ctx.fillStyle =
+            "#b7b7b7";
+
+        ctx.fillRect(
+            x + 7,
+            y - 8,
+            3,
+            17
+        );
+    }
+
+
+    if (
+        unit.type === "archer"
+    ) {
+
+        ctx.strokeStyle =
+            "#8b572a";
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x + 8,
+            y,
+            7,
+            -1.2,
+            1.2
+        );
+
+        ctx.stroke();
+    }
+
+
+    // Health
+
+    ctx.fillStyle =
+        "#222";
+
+    ctx.fillRect(
+        x - 10,
+        y - 20,
+        20,
+        3
+    );
+
+
+    ctx.fillStyle =
+        "#50c85b";
+
+    ctx.fillRect(
+        x - 10,
+        y - 20,
+        20 *
+        clamp(
+            unit.hp /
+            unit.maxHp,
+            0,
+            1
+        ),
+        3
+    );
+
+
+    // Carrying indicator
+
+    if (
+        unit.carrying > 0
+    ) {
+
+        ctx.fillStyle =
+            "#fff";
+
+        ctx.font =
+            "10px Arial";
+
+        ctx.fillText(
+            unit.carrying,
+            x - 4,
+            y + 24
+        );
+    }
+}
+
+
+/* =========================================================
+   BUILDING PREVIEW
+   ========================================================= */
+
+function drawBuildingPreview() {
+
+    if (!buildingMode) return;
+
+    if (mouseY < 90) return;
+
+
+    const world =
+        screenToWorld();
+
+
+    const tx =
+        Math.floor(
+            world.x
+        );
+
+    const ty =
+        Math.floor(
+            world.y
+        );
+
+
+    const size =
+        BUILDINGS[
+            buildingMode
+        ].size * TILE;
+
+
+    const x =
+        tx * TILE -
+        cameraX;
+
+    const y =
+        ty * TILE -
+        cameraY;
+
+
+    ctx.globalAlpha =
+        0.5;
+
+
+    ctx.fillStyle =
+        canAfford(
+            BUILDINGS[
+                buildingMode
+            ]
+        )
+        ? "#63d66b"
+        : "#d34b4b";
+
+
+    ctx.fillRect(
+        x,
+        y,
+        size,
+        size
+    );
+
+
+    ctx.globalAlpha =
+        1;
+}
+
+
+/* =========================================================
+   UI
+   ========================================================= */
+
+function drawUI() {
+
+    ctx.fillStyle =
+        "rgba(20,20,20,0.94)";
+
+    ctx.fillRect(
+        0,
+        0,
+        SCREEN_W,
+        90
+    );
+
+
+    const buttons = [
+
+        ["1 House", 10, 110],
+
+        ["2 Farm", 120, 220],
+
+        ["3 Camp", 230, 345],
+
+        ["4 Mine", 355, 470],
+
+        ["5 Barracks", 480, 605],
+
+        ["T Soldier", 615, 735],
+
+        ["V Villager", 745, 875]
+    ];
+
+
+    ctx.font =
+        "15px Arial";
+
+
+    for (
+        const button of buttons
+    ) {
+
+        const text =
+            button[0];
+
+        const left =
+            button[1];
+
+        const right =
+            button[2];
+
+
+        ctx.fillStyle =
+            "#3d3d3d";
+
+
+        ctx.fillRect(
+            left,
+            12,
+            right - left,
+            34
+        );
+
+
+        ctx.fillStyle =
+            "#fff";
+
+
+        ctx.fillText(
+            text,
+            left + 9,
+            34
+        );
+    }
+
+
+    ctx.fillStyle =
+        "#fff";
+
+    ctx.font =
+        "16px Arial";
+
+
+    ctx.fillText(
+        "Food: " +
+        Math.floor(food),
+        900,
+        25
+    );
+
+
+    ctx.fillText(
+        "Wood: " +
+        Math.floor(wood),
+        900,
+        48
+    );
+
+
+    ctx.fillText(
+        "Stone: " +
+        Math.floor(stone),
+        1010,
+        25
+    );
+
+
+    ctx.fillText(
+        "Gold: " +
+        Math.floor(gold),
+        1010,
+        48
+    );
+
+
+    ctx.fillText(
+        "Population: " +
+        population +
+        "/" +
+        populationCap,
+        900,
+        72
+    );
+
+
+    if (buildingMode) {
+
+        ctx.fillStyle =
+            "#ffe36b";
+
+        ctx.fillText(
+            "Building: " +
+            BUILDINGS[
+                buildingMode
+            ].name +
+            " — click to place",
+            15,
+            75
+        );
+    }
+
+
+    if (messageTimer > 0) {
+
+        ctx.fillStyle =
+            "rgba(0,0,0,0.75)";
+
+        ctx.fillRect(
+            300,
+            SCREEN_H - 60,
+            600,
+            40
+        );
+
+
+        ctx.fillStyle =
+            "#fff";
+
+        ctx.font =
+            "18px Arial";
+
+
+        ctx.fillText(
+            message,
+            320,
+            SCREEN_H - 34
+        );
+    }
+
+
+    ctx.fillStyle =
+        "rgba(0,0,0,0.65)";
+
+    ctx.fillRect(
+        10,
+        SCREEN_H - 30,
+        720,
+        22
+    );
+
+
+    ctx.fillStyle =
+        "#fff";
+
+    ctx.font =
+        "13px Arial";
+
+
+    ctx.fillText(
+        "WASD/Arrows: camera | Click: select | Drag: select army | Right-click: move/attack | 1-5: build | T: soldier | V: villager",
+        18,
+        SCREEN_H - 14
+    );
+}
+
+
+/* =========================================================
+   SELECTION BOX
+   ========================================================= */
+
+function drawSelectionBox() {
+
+    if (!dragging) return;
+
+
+    ctx.strokeStyle =
+        "#ffe45c";
+
+    ctx.lineWidth =
+        2;
+
+    ctx.strokeRect(
+        dragStartX,
+        dragStartY,
+        mouseX - dragStartX,
+        mouseY - dragStartY
+    );
+
+
+    ctx.fillStyle =
+        "rgba(255,228,92,0.12)";
+
+    ctx.fillRect(
+        dragStartX,
+        dragStartY,
+        mouseX - dragStartX,
+        mouseY - dragStartY
+    );
+}
+
+
+/* =========================================================
+   GAME END SCREEN
+   ========================================================= */
+
+function drawEndScreen() {
+
+    if (
+        !gameWon &&
+        !gameLost
+    ) {
+        return;
+    }
+
+
+    ctx.fillStyle =
+        "rgba(0,0,0,0.75)";
+
+    ctx.fillRect(
+        0,
+        0,
+        SCREEN_W,
+        SCREEN_H
+    );
+
+
+    ctx.textAlign =
+        "center";
+
+
+    ctx.fillStyle =
+        "#fff";
+
+    ctx.font =
+        "50px Arial";
+
+
+    ctx.fillText(
+        gameWon
+        ? "VICTORY!"
+        : "DEFEAT",
+        SCREEN_W / 2,
+        SCREEN_H / 2 - 30
+    );
+
+
+    ctx.font =
+        "22px Arial";
+
+
+    ctx.fillText(
+        gameWon
+        ? "The enemy empire has fallen."
+        : "Your empire has been defeated.",
+        SCREEN_W / 2,
+        SCREEN_H / 2 + 20
+    );
+
+
+    ctx.font =
+        "16px Arial";
+
+
+    ctx.fillText(
+        "Refresh the page to play again.",
+        SCREEN_W / 2,
+        SCREEN_H / 2 + 60
+    );
+
+
+    ctx.textAlign =
+        "left";
+}
+
+
+/* =========================================================
+   MAIN LOOP
+   ========================================================= */
+
+let previousTime = 0;
+
+
+function gameLoop(time) {
+
+    const delta =
+        Math.min(
+            50,
+            time - previousTime
+        );
+
+    previousTime = time;
+
+
+    updateCamera();
+
+    updateEconomy();
+
+    updateUnits();
+
+    updateBuildingCombat();
+
+    cleanupDeadUnits();
+
+    checkGameEnd();
+
+
+    if (
+        messageTimer > 0
+    ) {
+
+        messageTimer--;
+    }
+
+
+    drawWorld();
+
+    drawResources();
+
+    drawBuildings();
+
+    drawUnits();
+
+    drawBuildingPreview();
+
+    drawUI();
+
+    drawSelectionBox();
+
+    drawEndScreen();
+
+
+    requestAnimationFrame(
+        gameLoop
+    );
+}
+
+
+requestAnimationFrame(
+    gameLoop
+);
+
+</script>
+
+</body>
+</html>
